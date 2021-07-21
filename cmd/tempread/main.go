@@ -33,7 +33,7 @@ func init() {
 func main() {
 	var (
 		hueHost     = flag.String("bridge", "", "Hue bridge hostname/IP address")
-		hueUser     = flag.String("user", "", "Hue bridge authorized user")
+		hueUser     = flag.String("user", "", "Hue bridge authorized user (or give HUE_USER through env)")
 		metricsPort = flag.Int("metrics-port", 2112, "Prometheus metrics port")
 		metricsPath = flag.String("metrics-path", "/metrics", "Prometheus metrics path")
 		debug       = flag.Bool("debug", false, "Enable debug logging")
@@ -45,7 +45,12 @@ func main() {
 	}
 
 	if *hueUser == "" {
-		log.Fatal("-user required")
+		if envUser := os.Getenv("HUE_USER"); envUser != "" {
+			log.Debug("using user from environment")
+			*hueUser = envUser
+		} else {
+			log.Fatal("-user required")
+		}
 	}
 
 	promHost := fmt.Sprintf(":%d", *metricsPort)
