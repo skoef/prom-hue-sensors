@@ -1,5 +1,7 @@
-FROM alpine:latest
+FROM --platform=$TARGETPLATFORM alpine:latest
 
-COPY tempread /bin/tempread
+ARG TARGETPLATFORM
+
+COPY out/${TARGETPLATFORM}/tempread /bin/tempread
 
 CMD ["/bin/tempread"]
