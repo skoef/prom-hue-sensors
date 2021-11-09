@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -14,11 +16,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	// username for this app in the Hue bridge
+	hueBridgeUsername = "prom-hue-sensors"
+	registerInterval  = 5 * time.Second
+)
+
 var (
-	currentTemp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "temperature",
-		Help: "Temperature in hundreds of degrees Celsius",
-	}, []string{"uid"})
 	sensorStatus = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "sensor_status",
 		Help: "Every parsable status for each sensor",
@@ -40,11 +44,14 @@ func init() {
 
 func main() {
 	var (
-		hueHost     = flag.String("bridge", "", "Hue bridge hostname/IP address")
-		hueUser     = flag.String("user", "", "Hue bridge authorized user (or give HUE_USER through env)")
-		metricsPort = flag.Int("metrics-port", 2112, "Prometheus metrics port")
-		metricsPath = flag.String("metrics-path", "/metrics", "Prometheus metrics path")
-		debug       = flag.Bool("debug", false, "Enable debug logging")
+		hueHost         = flag.String("bridge", "", "Hue bridge hostname/IP address")
+		hueUser         = flag.String("user", "", "Hue bridge authorized user (or give HUE_USER through env)")
+		metricsPort     = flag.Int("metrics-port", 2112, "Prometheus metrics port")
+		metricsPath     = flag.String("metrics-path", "/metrics", "Prometheus metrics path")
+		debug           = flag.Bool("debug", false, "Enable debug logging")
+		register        = flag.Bool("register", false, "Register new Hue Hue bridge authorized user")
+		registerTimeout = flag.Duration("register-timeout", time.Minute, "timeout for waiting on registering the user")
+		userKeyPath     = flag.String("user-key-path", "/etc/prom-hue-sensors.conf", "path to store registered user key")
 	)
 
 	flag.Parse()
@@ -52,15 +59,95 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	if *hueUser == "" {
-		if envUser := os.Getenv("HUE_USER"); envUser != "" {
-			log.Debug("using user from environment")
-			*hueUser = envUser
-		} else {
-			log.Fatal("-user required")
+	var bridge *huego.Bridge
+	var err error
+	// if no bridge address is given, try to discover it
+	if *hueHost == "" {
+		// div
+		bridge, err = huego.Discover()
+		if err != nil {
+			log.WithError(err).Fatal("could not discover bridge")
+		}
+
+		log.WithField("bridge", bridge.Host).Info("discovered bridge")
+	} else {
+		// create a new bridge with given address
+		bridge = &huego.Bridge{
+			Host: *hueHost,
 		}
 	}
 
+	// when registering, we're trying to create a hue user
+	// this requires the operator of the hue bridge to physically press the link
+	// button on the bridge
+	// after the set timeout, the process fails
+	if *register {
+		ctx, cancel := context.WithTimeout(context.Background(), *registerTimeout)
+
+		for {
+			userKey, err := bridge.CreateUserContext(ctx, hueBridgeUsername)
+			if err != nil {
+				log.WithError(err).Debug("registration attempt failed")
+
+				// if the context timed out, abort
+				if errors.Is(err, context.DeadlineExceeded) {
+					log.Fatal("failed to register user, try again later")
+				}
+
+				// see if the error the API is returning is about pressing the
+				// button
+				var apiErr *huego.APIError
+				if errors.As(err, &apiErr) && apiErr.Type == 101 {
+					log.Error("failed to create user, press key on Hue bridge")
+					time.Sleep(registerInterval)
+
+					continue
+				}
+
+				// we didn't catch this error, abort
+				log.WithError(err).Fatal("unhandled registration error")
+			}
+
+			cancel()
+			log.WithField("userKey", userKey).Info("created user, use this key as HUE_USER")
+
+			if *userKeyPath != "" {
+				if err := os.WriteFile(*userKeyPath, []byte(userKey), os.FileMode(0644)); err != nil {
+					log.WithError(err).Fatalf("could not write user key to %s", *userKeyPath)
+				}
+
+				log.WithField("userKeyPath", userKeyPath).Info("saved user key to file")
+			}
+
+			break
+		}
+
+		log.Info("done registering")
+
+		return
+	}
+
+	if *hueUser == "" {
+		// if no hue user is given, try to get it from the environment variable HUE_USER
+		if envUser := os.Getenv("HUE_USER"); envUser != "" {
+			log.Debug("using user from environment")
+			*hueUser = envUser
+		} else if *userKeyPath != "" {
+			// try to get the user key from the given user key path
+			if data, err := os.ReadFile(*userKeyPath); err == nil {
+				log.WithField("path", *userKeyPath).Debug("using user from user key path")
+				*hueUser = string(data)
+			}
+		}
+
+		if *hueUser == "" {
+			log.Fatal("-user required")
+		}
+
+		bridge.User = *hueUser
+	}
+
+	// start prometheus server
 	promHost := fmt.Sprintf(":%d", *metricsPort)
 
 	log.WithFields(log.Fields{
@@ -75,18 +162,6 @@ func main() {
 			log.WithError(err).Fatal("could not start prometheus")
 		}
 	}()
-
-	var bridge *huego.Bridge
-	if *hueHost == "" {
-		b, err := huego.Discover()
-		if err != nil {
-			log.WithError(err).Fatal("could not discover bridge")
-		}
-
-		bridge = b.Login(*hueUser)
-	} else {
-		bridge = huego.New(*hueHost, *hueUser)
-	}
 
 	firstRun := true
 	for {
@@ -143,33 +218,6 @@ func main() {
 
 				ssLog.Info("registered sensor state")
 			}
-
-			// backwards compatibility
-			if sensor.Type != "ZLLTemperature" {
-				continue
-			}
-
-			temp := -1.0
-			for name, state := range sensor.State {
-				if name == "temperature" {
-					if t, ok := state.(float64); ok {
-						temp = t
-						break
-					}
-				}
-			}
-
-			if temp == -1.0 {
-				sLog.Warning("could not get temperature reading")
-				continue
-			}
-
-			currentTemp.With(prometheus.Labels{
-				"uid": sensor.UniqueID,
-			}).Set(temp)
-
-			sLog.WithField("temp", temp).Info("registered temperature")
-			// end of backwards compatibility
 		}
 	}
 }
