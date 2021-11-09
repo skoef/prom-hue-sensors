@@ -191,6 +191,7 @@ func main() {
 				"name": sensor.Name,
 			}
 
+			// process sensor state
 			for name, state := range sensor.State {
 				// should we just ignore this state name
 				if _, ok := ignoreStates[name]; ok {
@@ -217,10 +218,38 @@ func main() {
 					sensorStatus.With(sensorLabel).Set(f)
 				default:
 					ssLog.Debug("could not register sensor state")
+
 					continue
 				}
 
 				ssLog.Info("registered sensor state")
+			}
+
+			// process sensor config
+			for name, config := range sensor.Config {
+				name = fmt.Sprintf("config_%s", name)
+
+				sensorLabel["type"] = name
+				scLog := sLog.WithFields(log.Fields{
+					"type":    name,
+					"reading": config,
+				})
+
+				// decide how we should interpret the value from this sensor
+				switch c := config.(type) {
+				case float64:
+					sensorStatus.With(sensorLabel).Set(c)
+				case bool:
+					f := 0.0
+					if c {
+						f = 1.0
+					}
+					sensorStatus.With(sensorLabel).Set(f)
+				default:
+					scLog.Debug("could not register sensor config")
+
+					continue
+				}
 			}
 		}
 	}
