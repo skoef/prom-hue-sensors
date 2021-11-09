@@ -51,7 +51,7 @@ func main() {
 		debug           = flag.Bool("debug", false, "Enable debug logging")
 		register        = flag.Bool("register", false, "Register new Hue Hue bridge authorized user")
 		registerTimeout = flag.Duration("register-timeout", time.Minute, "timeout for waiting on registering the user")
-		userKeyPath     = flag.String("user-key-path", "/etc/prom-hue-sensors.conf", "path to store registered user key")
+		userKeyPath     = flag.String("user-key-path", "", "path to stored registered user key")
 	)
 
 	flag.Parse()
@@ -109,7 +109,11 @@ func main() {
 			}
 
 			cancel()
-			log.WithField("userKey", userKey).Info("created user, use this key as HUE_USER")
+			if *userKeyPath == "" {
+				log.WithField("userKey", userKey).Info("registration successful, use this key as HUE_USER or with -user")
+			} else {
+				log.Info("registration successful")
+			}
 
 			if *userKeyPath != "" {
 				if err := os.WriteFile(*userKeyPath, []byte(userKey), os.FileMode(0644)); err != nil {
