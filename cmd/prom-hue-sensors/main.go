@@ -147,9 +147,9 @@ func main() {
 		if *hueUser == "" {
 			log.Fatal("-user required")
 		}
-
-		bridge.User = *hueUser
 	}
+
+	bridge.User = *hueUser
 
 	// start prometheus server
 	promHost := fmt.Sprintf(":%d", *metricsPort)
