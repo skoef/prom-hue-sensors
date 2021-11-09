@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prom-hue-sensors
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prom-hue-sensors
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prom-hue-sensors
+    spec:
+      containers:
+      - args:
+        - /bin/prom-hue-sensors
+        - -user-key-path=/hue/prom-hue-sensors.conf
+        image: rschoof/prom-hue-sensors:latest
+        imagePullPolicy: Always
+        name: prom-hue-sensors
+        ports:
+        - containerPort: 2112
+          name: metrics
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /hue
+          name: config
+          readOnly: true
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - '[ ! -f /hue/prom-hue-sensors.conf ] && /bin/prom-hue-sensors -register -user-key-path /hue/prom-hue-sensors.conf'
+        image: rschoof/prom-hue-sensors:latest
+        imagePullPolicy: Always
+        name: register
+        volumeMounts:
+        - mountPath: /hue
+          name: config
+      volumes:
+      - hostPath:
+          # CHANGE THIS TO A PATH ON YOUR SYSTEM
+          # AND MAKE SURE IT IS WRITABLE BY UNPRIVILEGED USERS
+          path: /home/johndoe/hue
+          type: DirectoryOrCreate
+        name: config

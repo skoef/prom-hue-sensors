@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prom-hue-sensors
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prom-hue-sensors
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prom-hue-sensors
+    spec:
+      containers:
+      - env:
+        - name: HUE_USER
+          # REPLACE THIS WITH YOUR ACTUAL USER KEY
+          # YOU CAN REGISTER FOR A KEY WITH
+          # prom-hue-sensors -register
+          value: ie4chah8pho-4aisaiNio2wee9z-oh2yo2AhMaiy
+        image: rschoof/prom-hue-sensors:latest
+        imagePullPolicy: Always
+        name: prom-hue-sensors
+        ports:
+        - containerPort: 2112
+          name: metrics
+          protocol: TCP
